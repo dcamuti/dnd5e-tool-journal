@@ -46,7 +46,13 @@ textarea{width:100%; min-height:90px; resize:vertical; line-height:1.5}
 .xbtn:hover{color:#e07a7a}
 .hook-done input[type=text]{text-decoration:line-through; color:var(--muted)}
 .toolbar{display:flex; gap:8px; flex-wrap:wrap; margin-top:10px}
+.suite-nav{max-width:1050px; margin:14px auto -8px; padding:0 20px; display:flex; gap:8px; flex-wrap:wrap; align-items:center}
+.suite-nav .sn-lbl{font-family:var(--font-display); font-size:.68rem; letter-spacing:2px; color:var(--muted)}
+.suite-nav a{background:linear-gradient(180deg,#2c2216,#241b10); border:1px solid var(--border); border-radius:20px; padding:5px 14px; font-size:.8rem; color:var(--ink); text-decoration:none; font-family:var(--font-display); transition:all .15s}
+.suite-nav a:hover{border-color:var(--gold); color:var(--gold-l)}
+.suite-nav a.on{background:linear-gradient(180deg,#a13636,#7a2626); border-color:#c95454; color:#fff; pointer-events:none}
 @media print{
+  .suite-nav{display:none !important}
   body{background:#fff; color:#222}
   .app-header,.btn,.xbtn,.toolbar,#q{display:none !important}
   .panel,.sess,.row{border-color:#bbb; background:#fff; box-shadow:none; break-inside:avoid}
@@ -67,6 +73,13 @@ textarea{width:100%; min-height:90px; resize:vertical; line-height:1.5}
     <label class="btn" style="cursor:pointer">⬆ Ripristina backup<input type="file" accept=".json" style="display:none" onchange="if(this.files[0])restoreSuite(this.files[0]);this.value=''"></label>
   </div>
 </header>
+<nav class="suite-nav">
+  <span class="sn-lbl">SUITE D&amp;D 5E</span>
+  <a href="https://dcamuti.github.io/dnd5e-tool-characters/">⚔️ Schede PG</a>
+  <a href="https://dcamuti.github.io/dnd5e-tool-npcs/">🎭 NPC</a>
+  <a href="https://dcamuti.github.io/dnd5e-tool-encounters/">🐉 Incontri</a>
+  <a class="on" href="https://dcamuti.github.io/dnd5e-tool-journal/">📖 Diario</a>
+</nav>
 <main>
   <div class="panel">
     <h2>📜 Sessioni</h2>
