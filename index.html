@@ -90,6 +90,15 @@ textarea{width:100%; min-height:90px; resize:vertical; line-height:1.5}
     <div id="ovBody"></div>
   </div>
   <div class="panel">
+    <h2>⭐ Esperienza del party</h2>
+    <div class="hint">XP a testa, accumulati automaticamente da «🏁 Concludi combattimento» del tracker. Aggiungi a mano le ricompense di missione (o correzioni, anche negative).</div>
+    <div id="xpBody"></div>
+    <div class="toolbar">
+      <button class="btn small gold" onclick="addXp()">➕ Aggiungi XP</button>
+    </div>
+    <div id="xpLog" style="margin-top:10px"></div>
+  </div>
+  <div class="panel">
     <h2>📜 Sessioni</h2>
     <div class="hint">Il racconto della campagna, sessione per sessione. Tutto si salva da solo mentre scrivi.</div>
     <button class="btn gold" onclick="addSess()">➕ Nuova sessione</button>
@@ -124,6 +133,7 @@ const esc=s=>(s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/"/g,"&q
 
 let DIA=lsGet("dnd5e_diary",{sessions:[],npcs:[],places:[],hooks:[]});
 ["sessions","npcs","places","hooks"].forEach(k=>{if(!Array.isArray(DIA[k]))DIA[k]=[]});
+if(!DIA.xp||typeof DIA.xp.total!=="number")DIA.xp={total:0,log:[]};
 function save(){lsSet("dnd5e_diary",DIA)}
 const uid=()=>Date.now().toString(36)+Math.random().toString(36).slice(2,6);
 const match=(q,...fields)=>!q||fields.some(f=>(f||"").toLowerCase().includes(q));
@@ -173,6 +183,48 @@ function render(){
    </div>`).join("")||`<p style="color:var(--muted)">Nessun aggancio aperto. Sicuro? 😉</p>`;
 }
 
+/* registro esperienza (soglie PHB) */
+const LVL_XP=[0,300,900,2700,6500,14000,23000,34000,48000,64000,85000,100000,120000,140000,165000,195000,225000,265000,305000,355000];
+function xpLevel(xp){let l=1;for(let i=0;i<LVL_XP.length;i++)if(xp>=LVL_XP[i])l=i+1;return l}
+function addXp(){
+  const a=parseInt(prompt("XP a testa da aggiungere (negativi per correggere):","100"),10);
+  if(!a||isNaN(a))return;
+  const note=prompt("Nota (es. «Missione: il pozzo di Borgoverde»):","Ricompensa di missione")||"";
+  DIA.xp.total=Math.max(0,DIA.xp.total+a);
+  DIA.xp.log.unshift({id:uid(),date:new Date().toISOString().slice(0,10),amount:a,note});
+  DIA.xp.log=DIA.xp.log.slice(0,50);
+  save();renderXp();
+}
+function delXp(id){
+  const e=DIA.xp.log.find(x=>x.id===id);if(!e)return;
+  if(!confirm("Rimuovere questa voce? Gli XP verranno scalati dal totale."))return;
+  DIA.xp.total=Math.max(0,DIA.xp.total-e.amount);
+  DIA.xp.log=DIA.xp.log.filter(x=>x.id!==id);
+  save();renderXp();
+}
+function renderXp(){
+  const xp=DIA.xp.total,lv=xpLevel(xp);
+  const next=lv<20?LVL_XP[lv]:null;
+  const base=LVL_XP[lv-1];
+  const pct=next?Math.min(100,Math.round((xp-base)/(next-base)*100)):100;
+  $("xpBody").innerHTML=`
+   <div style="display:flex;gap:24px;flex-wrap:wrap;align-items:center;margin-bottom:8px">
+    <div><span style="font-family:var(--font-display);font-size:1.7rem;color:var(--gold-l)">${xp.toLocaleString("it-IT")}</span> <span style="color:var(--muted);font-size:.85rem">XP a testa</span></div>
+    <div><span style="font-family:var(--font-display);font-size:1.7rem;color:var(--gold-l)">Liv. ${lv}</span> <span style="color:var(--muted);font-size:.85rem">${next?`prossimo a ${next.toLocaleString("it-IT")} XP (mancano ${(next-xp).toLocaleString("it-IT")})`:"livello massimo"}</span></div>
+   </div>
+   <div style="height:14px;background:#1a130b;border:1px solid var(--border);border-radius:8px;overflow:hidden">
+    <div style="height:100%;width:${pct}%;background:linear-gradient(90deg,#8f6f1a,#d4ab35);transition:width .3s"></div>
+   </div>
+   ${next&&pct>=100?"":""}${pct>=90&&next?`<div style="color:var(--gold-l);font-size:.85rem;margin-top:6px">✨ Il party è a un passo dal livello ${lv+1}!</div>`:""}`;
+  $("xpLog").innerHTML=DIA.xp.log.length?DIA.xp.log.slice(0,12).map(e=>`
+   <div class="row" style="padding:6px 12px">
+    <span style="color:var(--muted);font-size:.78rem;min-width:80px">${e.date}</span>
+    <b style="color:${e.amount<0?"#e07a7a":"var(--gold-l)"};min-width:70px">${e.amount>0?"+":""}${e.amount.toLocaleString("it-IT")}</b>
+    <span style="flex:1;font-size:.85rem;color:var(--ink)">${esc(e.note)}</span>
+    <span class="xbtn" onclick="delXp('${e.id}')">✕</span>
+   </div>`).join("")
+   :`<p style="color:var(--muted);font-size:.85rem">Nessuna voce: concludi un combattimento nel tracker o aggiungi XP a mano.</p>`;
+}
 /* panoramica campagna: legge i dati degli altri tool (stessa origine) */
 const T_URL={pg:"https://dcamuti.github.io/dnd5e-tool-characters/",npc:"https://dcamuti.github.io/dnd5e-tool-npcs/",enc:"https://dcamuti.github.io/dnd5e-tool-encounters/"};
 function overview(){
@@ -209,7 +261,8 @@ function impDiary(inp){
     if(d.type!=="dnd5e_diary"||!d.data)throw 0;
     if(!confirm("Importare il diario? Le voci attuali verranno sostituite."))return;
     DIA=d.data;["sessions","npcs","places","hooks"].forEach(k=>{if(!Array.isArray(DIA[k]))DIA[k]=[]});
-    save();render();
+    if(!DIA.xp||typeof DIA.xp.total!=="number")DIA.xp={total:0,log:[]};
+    save();render();renderXp();
   }catch(err){alert("File non valido.")}};
   rd.readAsText(f);inp.value="";
 }
@@ -236,6 +289,7 @@ function restoreSuite(file){
 }
 render();
 overview();
+renderXp();
 </script>
 </body>
 </html>
