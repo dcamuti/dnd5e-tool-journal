@@ -45,7 +45,8 @@ textarea{width:100%; min-height:90px; resize:vertical; line-height:1.5}
 .xbtn{cursor:pointer; color:var(--muted); font-size:1rem; padding:0 4px}
 .xbtn:hover{color:#e07a7a}
 .hook-done input[type=text]{text-decoration:line-through; color:var(--muted)}
-.toolbar{display:flex; gap:8px; flex-wrap:wrap; margin-top:10px}
+.toolbar{display:flex; gap:8px; flex-wrap:wrap; margin-top:10px; align-items:center}
+.sep{display:inline-block; vertical-align:middle; width:1px; height:24px; background:var(--border); margin:0 4px; flex:none}
 .suite-nav{max-width:1050px; margin:14px auto -8px; padding:0 20px; display:flex; gap:8px; flex-wrap:wrap; align-items:center}
 .suite-nav .sn-lbl{font-family:var(--font-display); font-size:.68rem; letter-spacing:2px; color:var(--muted)}
 .suite-nav a{background:linear-gradient(180deg,#2c2216,#241b10); border:1px solid var(--border); border-radius:20px; padding:5px 14px; font-size:.8rem; color:var(--ink); text-decoration:none; font-family:var(--font-display); transition:all .15s}
@@ -67,8 +68,10 @@ textarea{width:100%; min-height:90px; resize:vertical; line-height:1.5}
   <div>
     <input type="text" id="q" placeholder="🔍 cerca nel diario…" oninput="render()" style="width:180px">
     <button class="btn" onclick="window.print()">🖨 Stampa</button>
+    <span class="sep"></span>
     <button class="btn" onclick="expDiary()">⬇ Esporta diario</button>
-    <label class="btn" style="cursor:pointer">⬆ Importa<input type="file" accept=".json" style="display:none" onchange="impDiary(this)"></label>
+    <label class="btn" style="cursor:pointer">⬆ Importa diario<input type="file" accept=".json" style="display:none" onchange="impDiary(this)"></label>
+    <span class="sep"></span>
     <button class="btn" onclick="backupSuite()">🗄 Backup suite</button>
     <label class="btn" style="cursor:pointer">⬆ Ripristina backup<input type="file" accept=".json" style="display:none" onchange="if(this.files[0])restoreSuite(this.files[0]);this.value=''"></label>
   </div>
@@ -81,6 +84,11 @@ textarea{width:100%; min-height:90px; resize:vertical; line-height:1.5}
   <a class="on" href="https://dcamuti.github.io/dnd5e-tool-journal/">📖 Diario</a>
 </nav>
 <main>
+  <div class="panel">
+    <h2>🧭 Panoramica campagna</h2>
+    <div class="hint">Dati letti in automatico dagli altri tool della suite (stesso browser e stessa origine). <a onclick="overview()" style="color:var(--gold-l);cursor:pointer;text-decoration:underline">↻ Aggiorna</a></div>
+    <div id="ovBody"></div>
+  </div>
   <div class="panel">
     <h2>📜 Sessioni</h2>
     <div class="hint">Il racconto della campagna, sessione per sessione. Tutto si salva da solo mentre scrivi.</div>
@@ -165,6 +173,28 @@ function render(){
    </div>`).join("")||`<p style="color:var(--muted)">Nessun aggancio aperto. Sicuro? 😉</p>`;
 }
 
+/* panoramica campagna: legge i dati degli altri tool (stessa origine) */
+const T_URL={pg:"https://dcamuti.github.io/dnd5e-tool-characters/",npc:"https://dcamuti.github.io/dnd5e-tool-npcs/",enc:"https://dcamuti.github.io/dnd5e-tool-encounters/"};
+function overview(){
+  const chars=lsGet("dnd5e_chars",[]),npcs=lsGet("dnd5e_npcs",[]),encs=lsGet("enc_saved",[]),hb=lsGet("enc_hb",[]);
+  let h="";
+  const box=(title,url,inner)=>`<div style="background:linear-gradient(160deg,#2a2013,#231a0e);border:1px solid var(--border);border-radius:10px;padding:12px 14px;margin-bottom:10px">
+    <div style="font-family:var(--font-display);color:var(--gold-l);font-size:.85rem;margin-bottom:6px">${title} <a href="${url}" style="color:var(--muted);font-size:.7rem;text-decoration:none">↗ apri il tool</a></div>${inner}</div>`;
+  h+=box(`⚔️ Party (${chars.length})`,T_URL.pg,
+    chars.length?chars.slice(0,10).map(c=>{
+      const hp=c.data&&c.data.play&&c.data.play.hp!=null?` · <b style="color:${c.data.play.hp===0?"#e07a7a":"var(--gold-l)"}">${c.data.play.hp} pf</b>`:"";
+      return`<div style="font-size:.88rem;padding:2px 0"><b style="color:var(--ink)">${esc(c.name)}</b> <span style="color:var(--muted)">— ${esc(c.info||"")}${hp}</span></div>`}).join("")
+    :`<span style="color:var(--muted);font-size:.85rem">Nessun personaggio salvato nel generatore schede.</span>`);
+  h+=box(`🎭 NPC salvati (${npcs.length})`,T_URL.npc,
+    npcs.length?npcs.slice(-8).reverse().map(n=>`<div style="font-size:.88rem;padding:2px 0"><b style="color:var(--ink)">${esc(n.name)}</b> <span style="color:var(--muted)">— ${esc(n.race||"")}, ${esc(n.occ||"")}</span></div>`).join("")
+    :`<span style="color:var(--muted);font-size:.85rem">Nessun NPC salvato nel generatore NPC.</span>`);
+  h+=box(`🐉 Incontri pronti (${encs.length}) · Homebrew (${hb.length})`,T_URL.enc,
+    encs.length?encs.slice(-6).reverse().map(e=>`<div style="font-size:.88rem;padding:2px 0"><b style="color:var(--ink)">${esc(e.name)}</b> <span style="color:var(--muted)">— ${esc((e.enc||[]).map(x=>x.q+"× "+x.n).join(", "))}</span></div>`).join("")
+    :`<span style="color:var(--muted);font-size:.85rem">Nessun incontro salvato nel generatore incontri.</span>`);
+  if(!chars.length&&!npcs.length&&!encs.length)
+    h+=`<div class="hint" style="margin-top:4px">Suggerimento: la panoramica si popola quando usi gli altri tool nello stesso browser e sulla stessa origine (es. tutti su dcamuti.github.io, o tutti in locale). I dati restano comunque nei rispettivi tool.</div>`;
+  $("ovBody").innerHTML=h;
+}
 /* export / import del solo diario */
 function expDiary(){
   const blob=new Blob([JSON.stringify({type:"dnd5e_diary",data:DIA},null,1)],{type:"application/json"});
@@ -205,6 +235,7 @@ function restoreSuite(file){
   rd.readAsText(file);
 }
 render();
+overview();
 </script>
 </body>
 </html>
