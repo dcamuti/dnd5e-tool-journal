@@ -91,12 +91,15 @@ textarea{width:100%; min-height:90px; resize:vertical; line-height:1.5}
     <div id="ovBody"></div>
   </div>
   <div class="panel">
-    <h2>⭐ Esperienza del party</h2>
-    <div class="hint">XP a testa, accumulati automaticamente da «🏁 Concludi combattimento» del tracker. Aggiungi a mano le ricompense di missione (o correzioni, anche negative).</div>
-    <div id="xpBody"></div>
-    <div class="toolbar">
-      <button class="btn small gold" onclick="addXp()">➕ Aggiungi XP</button>
+    <h2>⭐ Progressione del party</h2>
+    <div class="toolbar" style="margin-top:6px">
+      <span style="font-size:.85rem;color:var(--muted)">Modalità:</span>
+      <button class="btn small" id="modeXp" onclick="setXpMode('xp')">⭐ Punti esperienza</button>
+      <button class="btn small" id="modeMs" onclick="setXpMode('milestone')">🏔 Milestone</button>
     </div>
+    <div class="hint" id="xpHint"></div>
+    <div id="xpBody"></div>
+    <div id="xpForm"></div>
     <div id="xpLog" style="margin-top:10px"></div>
   </div>
   <div class="panel">
@@ -129,6 +132,30 @@ textarea{width:100%; min-height:90px; resize:vertical; line-height:1.5}
 const $=id=>document.getElementById(id);
 function lsGet(k,d){try{const v=localStorage.getItem(k);return v?JSON.parse(v):d}catch(e){return d}}
 function lsSet(k,v){try{localStorage.setItem(k,JSON.stringify(v))}catch(e){}}
+/* ================= DATI ESTERNI (file importati, link condivisi, backup) =================
+   Tutto ciò che arriva da fuori viene ripulito prima di entrare nella suite:
+   niente markup, virgolette o entità che possano "uscire" dagli attributi HTML;
+   gli id vengono ridotti a caratteri sicuri. Solo i campi player/dm degli enigmi
+   possono contenere HTML, che passa da un filtro a lista bianca. */
+const PZ_ALLOW=false;
+const PZ_HTML_KEYS=["player","dm"];
+function cleanHtml(html){
+  try{const doc=new DOMParser().parseFromString("<body>"+(html||"")+"</body>","text/html");
+    doc.body.querySelectorAll("script,iframe,object,embed,link,meta,base,form,frame,frameset,noscript,template,style").forEach(n=>n.remove());
+    doc.body.querySelectorAll("*").forEach(el=>[...el.attributes].forEach(a=>{
+      const n=a.name.toLowerCase(),v=(a.value||"").replace(/[\s\u0000-\u001f]/g,"").toLowerCase();
+      const urlAttr=["href","src","xlink:href","action","formaction","background","poster"].includes(n);
+      if(n.startsWith("on")||n==="srcdoc"||(urlAttr&&(v.startsWith("javascript:")||v.startsWith("vbscript:")||(v.startsWith("data:")&&!v.startsWith("data:image/")))))el.removeAttribute(a.name)}));
+    return doc.body.innerHTML}catch(e){return String(html||"").replace(/[<>]/g,"")}}
+function cleanStr(v){return v.replace(/[<>]/g,"").replace(/"/g,"”").replace(/&(?=[#A-Za-z0-9])/g,"＆")}
+function safeParse(txt,allowPzHtml){
+  return JSON.parse(txt,(k,v)=>{
+    if(typeof v!=="string")return v;
+    if(allowPzHtml&&PZ_HTML_KEYS.includes(k))return cleanHtml(v);
+    if(k==="id")return v.replace(/[^\w-]/g,"");
+    return cleanStr(v)})}
+/* valore di una chiave del backup: è JSON (tranne la lingua, che è testo semplice) */
+function safeStoreVal(k,v){try{return JSON.stringify(safeParse(v,k==="dnd5e_puzzles"))}catch(e){return String(v).replace(/[^\w-]/g,"")}}
 function ks(){const y=window.scrollY;requestAnimationFrame(()=>window.scrollTo(0,y))}
 const esc=s=>(s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/"/g,"&quot;");
 
@@ -184,66 +211,138 @@ function render(){
    </div>`).join("")||`<p style="color:var(--muted)">Nessun aggancio aperto. Sicuro? 😉</p>`;
 }
 
-/* registro esperienza (soglie PHB) */
+/* ================= PROGRESSIONE (XP per personaggio + milestone) =================
+   DIA.xp = { mode:"xp"|"milestone", pcs:{ chiave:{name,xp,ms} }, log:[{id,date,amount,who:[chiavi],note}], total (vecchio totale di party) }
+   chiave = id del PG nel Generatore Schede, oppure "n:<nome>" per PG aggiunti a mano nel tracker. */
 const LVL_XP=[0,300,900,2700,6500,14000,23000,34000,48000,64000,85000,100000,120000,140000,165000,195000,225000,265000,305000,355000];
 function xpLevel(xp){let l=1;for(let i=0;i<LVL_XP.length;i++)if(xp>=LVL_XP[i])l=i+1;return l}
-function addXp(){
-  const a=parseInt(prompt("XP a testa da aggiungere (negativi per correggere):","100"),10);
-  if(!a||isNaN(a))return;
-  const note=prompt("Nota (es. «Missione: il pozzo di Borgoverde»):","Ricompensa di missione")||"";
-  DIA.xp.total=Math.max(0,DIA.xp.total+a);
-  DIA.xp.log.unshift({id:uid(),date:new Date().toISOString().slice(0,10),amount:a,note});
-  DIA.xp.log=DIA.xp.log.slice(0,50);
-  save();renderXp();
+const XPSEL=new Set();let XPSEL_INIT=false;
+function chars(){return lsGet("dnd5e_chars",[]).filter(c=>c&&c.id)}
+function xpInit(){
+  const X=DIA.xp;if(!X.pcs||typeof X.pcs!=="object")X.pcs={};if(X.mode!=="milestone")X.mode="xp";
+  let ch=false;
+  chars().forEach(c=>{if(X.pcs[c.id])return;const lv=(c.st&&c.st.lv)||1;
+    /* migrazione: il vecchio totale era "a testa" per tutto il party */
+    X.pcs[c.id]={name:c.name,xp:Math.max(LVL_XP[Math.min(19,lv-1)],X.migrated?0:(X.total||0))};ch=true});
+  if(!X.migrated){X.migrated=true;ch=true}
+  if(ch)save();
 }
-function delXp(id){
-  const e=DIA.xp.log.find(x=>x.id===id);if(!e)return;
-  if(!confirm("Rimuovere questa voce? Gli XP verranno scalati dal totale."))return;
-  DIA.xp.total=Math.max(0,DIA.xp.total-e.amount);
-  DIA.xp.log=DIA.xp.log.filter(x=>x.id!==id);
-  save();renderXp();
-}
+/* elenco unificato: PG delle schede + PG presenti solo nel registro */
+function partyRows(){const X=DIA.xp,cs=chars(),out=[];
+  cs.forEach(c=>{const p=X.pcs[c.id]||{name:c.name,xp:0};out.push({k:c.id,name:c.name,info:c.info||"",lv:(c.st&&c.st.lv)||null,p,sheet:true})});
+  Object.keys(X.pcs).forEach(k=>{if(cs.some(c=>c.id===k))return;const p=X.pcs[k];out.push({k,name:p.name,info:"non presente nel Generatore Schede",lv:null,p,sheet:false})});
+  return out}
+function setXpMode(m){DIA.xp.mode=m;save();renderXp()}
+function lvupUrl(k,to){return toolUrl("pg")+"#lvup="+encodeURIComponent(k)+"&to="+to}
 function renderXp(){
-  const xp=DIA.xp.total,lv=xpLevel(xp);
-  const next=lv<20?LVL_XP[lv]:null;
-  const base=LVL_XP[lv-1];
-  const pct=next?Math.min(100,Math.round((xp-base)/(next-base)*100)):100;
-  $("xpBody").innerHTML=`
-   <div style="display:flex;gap:24px;flex-wrap:wrap;align-items:center;margin-bottom:8px">
-    <div><span style="font-family:var(--font-display);font-size:1.7rem;color:var(--gold-l)">${xp.toLocaleString("it-IT")}</span> <span style="color:var(--muted);font-size:.85rem">XP a testa</span></div>
-    <div><span style="font-family:var(--font-display);font-size:1.7rem;color:var(--gold-l)">Liv. ${lv}</span> <span style="color:var(--muted);font-size:.85rem">${next?`prossimo a ${next.toLocaleString("it-IT")} XP (mancano ${(next-xp).toLocaleString("it-IT")})`:"livello massimo"}</span></div>
-   </div>
-   <div style="height:14px;background:#1a130b;border:1px solid var(--border);border-radius:8px;overflow:hidden">
-    <div style="height:100%;width:${pct}%;background:linear-gradient(90deg,#8f6f1a,#d4ab35);transition:width .3s"></div>
-   </div>
-   ${next&&pct>=100?"":""}${pct>=90&&next?`<div style="color:var(--gold-l);font-size:.85rem;margin-top:6px">✨ Il party è a un passo dal livello ${lv+1}!</div>`:""}`;
-  $("xpLog").innerHTML=DIA.xp.log.length?DIA.xp.log.slice(0,12).map(e=>`
-   <div class="row" style="padding:6px 12px">
-    <span style="color:var(--muted);font-size:.78rem;min-width:80px">${e.date}</span>
-    <b style="color:${e.amount<0?"#e07a7a":"var(--gold-l)"};min-width:70px">${e.amount>0?"+":""}${e.amount.toLocaleString("it-IT")}</b>
-    <span style="flex:1;font-size:.85rem;color:var(--ink)">${esc(e.note)}</span>
-    <span class="xbtn" onclick="delXp('${e.id}')">✕</span>
-   </div>`).join("")
-   :`<p style="color:var(--muted);font-size:.85rem">Nessuna voce: concludi un combattimento nel tracker o aggiungi XP a mano.</p>`;
+  xpInit();
+  const X=DIA.xp,ms=X.mode==="milestone",rows=partyRows();
+  $("modeXp").classList.toggle("gold",!ms);$("modeMs").classList.toggle("gold",ms);
+  $("xpHint").textContent=ms
+    ?"Milestone: decidi tu quando il party sale di livello. «⬆ Milestone» segna il livello successivo per i PG selezionati; ogni giocatore lo applica dalla propria scheda."
+    :"XP per personaggio: «🏁 Concludi combattimento» del tracker li divide tra i PG presenti. Aggiungi a mano ricompense di missione o correzioni (anche negative).";
+  if(!XPSEL_INIT){rows.filter(r=>r.sheet).forEach(r=>XPSEL.add(r.k));XPSEL_INIT=true}
+  $("xpBody").innerHTML=rows.length?rows.map(r=>{
+    const xp=r.p.xp||0,xl=xpLevel(xp),lv=r.lv||xl;
+    const target=ms?(r.p.ms||0):xl;
+    const up=r.sheet&&target>lv;
+    const next=lv<20?LVL_XP[lv]:null,base=LVL_XP[lv-1];
+    const pct=ms?0:(next?Math.max(0,Math.min(100,Math.round((xp-base)/(next-base)*100))):100);
+    const behind=!ms&&r.sheet&&xl<lv;
+    return`<div class="row" style="padding:8px 12px">
+     <input type="checkbox" ${XPSEL.has(r.k)?"checked":""} onchange="xpSel('${r.k}',this.checked)" title="Selezionato per XP o milestone">
+     <span style="min-width:170px;flex:1"><b style="color:var(--ink)">${esc(r.name)}</b><br><span style="color:var(--muted);font-size:.75rem">${esc(r.info)}</span></span>
+     <span style="font-family:var(--font-display);color:var(--gold-l);min-width:62px">Liv. ${lv}</span>
+     ${ms?"":`<span style="min-width:180px;flex:1">
+       <span style="font-size:.85rem"><b style="color:var(--gold-l)">${xp.toLocaleString("it-IT")}</b> XP <span style="color:var(--muted);font-size:.75rem">${next?"/ "+next.toLocaleString("it-IT"):"· massimo"}</span></span>
+       <div style="height:8px;background:#1a130b;border:1px solid var(--border);border-radius:6px;overflow:hidden;margin-top:3px"><div style="height:100%;width:${pct}%;background:linear-gradient(90deg,#8f6f1a,#d4ab35)"></div></div></span>`}
+     ${up?`<a class="btn small gold" href="${lvupUrl(r.k,target)}" title="Apre la scheda nel generatore, al passo classe/livello">⬆ Sali al liv. ${target}</a>`
+        :behind?`<span style="font-size:.75rem;color:var(--muted)">XP sotto la soglia del liv. ${lv} <a style="color:var(--gold-l);cursor:pointer;text-decoration:underline" onclick="xpAlign('${r.k}',${lv})">allinea</a></span>`
+        :ms&&r.p.ms&&r.p.ms<=lv?`<span style="font-size:.75rem;color:var(--muted)">✓ milestone applicata</span>`:""}
+     ${r.sheet?"":`<span class="xbtn" title="Rimuovi dal registro" onclick="xpForget('${r.k}')">✕</span>`}
+    </div>`}).join("")
+   :`<p style="color:var(--muted);font-size:.85rem">Nessun personaggio: salva i PG nel Generatore Schede (stesso browser) o concludi un combattimento nel tracker.</p>`;
+  $("xpForm").innerHTML=!rows.length?"":ms
+    ?`<div class="toolbar"><button class="btn small gold" onclick="giveMilestone()">⬆ Milestone ai selezionati</button>
+       <input type="text" id="msNote" placeholder="Nota (es. «Sconfitto il drago di Borgoverde»)" style="flex:1;min-width:200px"></div>`
+    :`<div class="toolbar"><input type="text" id="xpAmt" placeholder="XP a testa" style="width:110px" inputmode="numeric">
+       <input type="text" id="xpNote" placeholder="Nota (es. «Missione: il pozzo di Borgoverde»)" style="flex:1;min-width:200px">
+       <button class="btn small gold" onclick="addXp()">➕ Aggiungi ai selezionati</button></div>`;
+  $("xpLog").innerHTML=X.log.length?X.log.slice(0,12).map(e=>{
+    const who=Array.isArray(e.who)?e.who.map(k=>(X.pcs[k]&&X.pcs[k].name)||"?").join(", "):"tutto il party";
+    return`<div class="row" style="padding:6px 12px">
+     <span style="color:var(--muted);font-size:.78rem;min-width:80px">${e.date}</span>
+     <b style="color:${e.amount<0?"#e07a7a":"var(--gold-l)"};min-width:70px">${e.ms?"⬆ liv.":(e.amount>0?"+":"")+e.amount.toLocaleString("it-IT")}</b>
+     <span style="flex:1;font-size:.85rem;color:var(--ink)">${esc(e.note)} <span style="color:var(--muted);font-size:.75rem">— ${esc(who)}</span></span>
+     <span class="xbtn" onclick="delXp('${e.id}')">✕</span>
+    </div>`}).join("")
+   :`<p style="color:var(--muted);font-size:.85rem">Registro vuoto.</p>`;
 }
+function xpSel(k,on){on?XPSEL.add(k):XPSEL.delete(k)}
+function selKeys(){const ks=partyRows().map(r=>r.k).filter(k=>XPSEL.has(k));if(!ks.length)alert("Seleziona almeno un personaggio.");return ks}
+function addXp(){
+  const a=parseInt(($("xpAmt").value||"").replace(/\./g,""),10);
+  if(!a||isNaN(a)){alert("Indica quanti XP a testa (negativi per correggere).");return}
+  const who=selKeys();if(!who.length)return;
+  const note=$("xpNote").value.trim()||"Ricompensa di missione";
+  const X=DIA.xp;who.forEach(k=>{const r=partyRows().find(x=>x.k===k);if(!X.pcs[k])X.pcs[k]={name:r?r.name:"?",xp:0};X.pcs[k].xp=Math.max(0,X.pcs[k].xp+a)});
+  X.log.unshift({id:uid(),date:new Date().toISOString().slice(0,10),amount:a,who,note});X.log=X.log.slice(0,50);
+  save();renderXp();
+}
+function giveMilestone(){
+  const who=selKeys();if(!who.length)return;const X=DIA.xp,rows=partyRows();
+  const note=$("msNote").value.trim()||"Milestone";
+  who.forEach(k=>{const r=rows.find(x=>x.k===k);const lv=(r&&r.lv)||1;if(!X.pcs[k])X.pcs[k]={name:r?r.name:"?",xp:0};
+    X.pcs[k].ms=Math.min(20,Math.max(X.pcs[k].ms||0,lv)+1)});
+  X.log.unshift({id:uid(),date:new Date().toISOString().slice(0,10),amount:0,ms:true,who,note});X.log=X.log.slice(0,50);
+  save();renderXp();
+}
+function xpAlign(k,lv){const p=DIA.xp.pcs[k];if(!p)return;p.xp=LVL_XP[lv-1];save();renderXp()}
+function xpForget(k){if(!confirm("Rimuovere questo personaggio dal registro esperienza?"))return;delete DIA.xp.pcs[k];XPSEL.delete(k);save();renderXp()}
+function delXp(id){
+  const X=DIA.xp,e=X.log.find(x=>x.id===id);if(!e)return;
+  if(!confirm(e.ms?"Rimuovere questa voce dal registro? (la milestone già segnata resta: correggi dalla scheda)":"Rimuovere questa voce? Gli XP verranno scalati ai personaggi coinvolti."))return;
+  if(!e.ms){if(Array.isArray(e.who))e.who.forEach(k=>{if(X.pcs[k])X.pcs[k].xp=Math.max(0,X.pcs[k].xp-e.amount)});
+    else Object.values(X.pcs).forEach(p=>p.xp=Math.max(0,p.xp-e.amount))}
+  X.log=X.log.filter(x=>x.id!==id);
+  save();renderXp();
+}
+/* aggiorna se un altro tool (tracker, schede) modifica i dati nello stesso browser */
+window.addEventListener("storage",e=>{
+  if(e.key==="dnd5e_diary"){DIA=lsGet("dnd5e_diary",DIA);["sessions","npcs","places","hooks"].forEach(k=>{if(!Array.isArray(DIA[k]))DIA[k]=[]});
+    if(!DIA.xp||typeof DIA.xp.total!=="number")DIA.xp={total:0,log:[]};render();renderXp()}
+  if(["dnd5e_chars","dnd5e_npcs","enc_saved","enc_trk","dnd5e_puzzles"].includes(e.key)){overview();renderXp()}
+});
 /* panoramica campagna: legge i dati degli altri tool (stessa origine) */
-const T_URL={pg:"https://dcamuti.github.io/dnd5e-tool-characters/",npc:"https://dcamuti.github.io/dnd5e-tool-npcs/",enc:"https://dcamuti.github.io/dnd5e-tool-encounters/"};
+const T_URL={pg:"https://dcamuti.github.io/dnd5e-tool-characters/",npc:"https://dcamuti.github.io/dnd5e-tool-npcs/",enc:"https://dcamuti.github.io/dnd5e-tool-encounters/",pz:"https://dcamuti.github.io/dnd5e-tool-puzzles/"};
+const T_FILE={pg:"dnd5e_tool_characters.html",npc:"dnd5e_tool_npcs.html",enc:"dnd5e_tool_encounters.html",pz:"dnd5e_tool_puzzles.html"};
+/* online si usano gli indirizzi GitHub Pages; in locale i file nella stessa cartella (stessi dati del browser) */
+function toolUrl(k){return /github\.io$/.test(location.hostname)?T_URL[k]:T_FILE[k]}
 function overview(){
   const chars=lsGet("dnd5e_chars",[]),npcs=lsGet("dnd5e_npcs",[]),encs=lsGet("enc_saved",[]),hb=lsGet("enc_hb",[]);
   let h="";
   const box=(title,url,inner)=>`<div style="background:linear-gradient(160deg,#2a2013,#231a0e);border:1px solid var(--border);border-radius:10px;padding:12px 14px;margin-bottom:10px">
     <div style="font-family:var(--font-display);color:var(--gold-l);font-size:.85rem;margin-bottom:6px">${title} <a href="${url}" style="color:var(--muted);font-size:.7rem;text-decoration:none">↗ apri il tool</a></div>${inner}</div>`;
-  h+=box(`⚔️ Party (${chars.length})`,T_URL.pg,
+  h+=box(`⚔️ Party (${chars.length})`,toolUrl("pg"),
     chars.length?chars.slice(0,10).map(c=>{
-      const hp=c.data&&c.data.play&&c.data.play.hp!=null?` · <b style="color:${c.data.play.hp===0?"#e07a7a":"var(--gold-l)"}">${c.data.play.hp} pf</b>`:"";
+      const hp=c.data&&c.data.play&&c.data.play.hp!=null?` · <b style="color:${c.data.play.hp===0?"#e07a7a":"var(--gold-l)"}">${c.data.play.hp}${c.st&&c.st.hpM?"/"+c.st.hpM:""} pf</b>`:"";
       return`<div style="font-size:.88rem;padding:2px 0"><b style="color:var(--ink)">${esc(c.name)}</b> <span style="color:var(--muted)">— ${esc(c.info||"")}${hp}</span></div>`}).join("")
     :`<span style="color:var(--muted);font-size:.85rem">Nessun personaggio salvato nel generatore schede.</span>`);
-  h+=box(`🎭 NPC salvati (${npcs.length})`,T_URL.npc,
+  h+=box(`🎭 NPC salvati (${npcs.length})`,toolUrl("npc"),
     npcs.length?npcs.slice(-8).reverse().map(n=>`<div style="font-size:.88rem;padding:2px 0"><b style="color:var(--ink)">${esc(n.name)}</b> <span style="color:var(--muted)">— ${esc(n.race||"")}, ${esc(n.occ||"")}</span></div>`).join("")
     :`<span style="color:var(--muted);font-size:.85rem">Nessun NPC salvato nel generatore NPC.</span>`);
-  h+=box(`🐉 Incontri pronti (${encs.length}) · Homebrew (${hb.length})`,T_URL.enc,
+  h+=box(`🐉 Incontri pronti (${encs.length}) · Homebrew (${hb.length})`,toolUrl("enc"),
     encs.length?encs.slice(-6).reverse().map(e=>`<div style="font-size:.88rem;padding:2px 0"><b style="color:var(--ink)">${esc(e.name)}</b> <span style="color:var(--muted)">— ${esc((e.enc||[]).map(x=>x.q+"× "+x.n).join(", "))}</span></div>`).join("")
     :`<span style="color:var(--muted);font-size:.85rem">Nessun incontro salvato nel generatore incontri.</span>`);
+  const trk=lsGet("enc_trk",{list:[]}),pz=lsGet("dnd5e_puzzles",[]);
+  if(trk&&Array.isArray(trk.list)&&trk.list.length){
+    const pcs=trk.list.filter(u=>u.pc),mons=trk.list.filter(u=>!u.pc),alive=mons.filter(u=>u.hp==null||u.hp>0);
+    h+=box(`🗡 Combattimento in corso${trk.round?` · round ${trk.round}`:""}`,toolUrl("enc"),
+      `<div style="font-size:.88rem;color:var(--muted)">${pcs.length} PG · ${alive.length}/${mons.length} nemici in piedi${pcs.length?" — "+pcs.map(u=>`<b style="color:${u.hp===0?"#e07a7a":"var(--ink)"}">${esc(u.name)}</b>${u.hp!=null?` ${u.hp}/${u.hpMax}`:""}`).join(", "):""}</div>`);
+  }
+  h+=box(`🔐 Enigmi salvati (${pz.length})`,toolUrl("pz"),
+    pz.length?pz.slice(0,5).map(p=>`<div style="font-size:.88rem;padding:2px 0"><b style="color:var(--ink)">${esc(p.name)}</b> <span style="color:var(--muted)">— ${esc(p.tipo||"")}</span></div>`).join("")
+    :`<span style="color:var(--muted);font-size:.85rem">Nessun enigma salvato.</span>`);
   if(!chars.length&&!npcs.length&&!encs.length)
     h+=`<div class="hint" style="margin-top:4px">Suggerimento: la panoramica si popola quando usi gli altri tool nello stesso browser e sulla stessa origine (es. tutti su dcamuti.github.io, o tutti in locale). I dati restano comunque nei rispettivi tool.</div>`;
   $("ovBody").innerHTML=h;
@@ -258,7 +357,7 @@ function impDiary(inp){
   const f=inp.files&&inp.files[0];if(!f)return;
   const rd=new FileReader();
   rd.onload=()=>{try{
-    const d=JSON.parse(rd.result);
+    const d=safeParse(rd.result,PZ_ALLOW);
     if(d.type!=="dnd5e_diary"||!d.data)throw 0;
     if(!confirm("Importare il diario? Le voci attuali verranno sostituite."))return;
     DIA=d.data;["sessions","npcs","places","hooks"].forEach(k=>{if(!Array.isArray(DIA[k]))DIA[k]=[]});
@@ -268,9 +367,9 @@ function impDiary(inp){
   rd.readAsText(f);inp.value="";
 }
 /* backup suite completo */
-const SUITE_KEYS=["dnd5e_chars","dnd5e_draft","dnd5e_lang","dnd5e_npcs","enc_src","enc_saved","enc_trk","enc_hb","dnd5e_diary","dnd5e_puzzles"];
+const SUITE_KEYS=["dnd5e_chars","dnd5e_draft","dnd5e_lang","dnd5e_homebrew","dnd5e_npcs","enc_src","enc_saved","enc_trk","enc_hb","dnd5e_diary","dnd5e_puzzles"];
 function backupSuite(){
-  const data={type:"dnd5e_suite_backup",date:new Date().toISOString(),store:{}};
+  const data={type:"dnd5e_suite_backup",ver:2,date:new Date().toISOString(),store:{}};
   let n=0;SUITE_KEYS.forEach(k=>{try{const v=localStorage.getItem(k);if(v!=null){data.store[k]=v;n++}}catch(e){}});
   if(!n){alert("Nulla da salvare.");return}
   const blob=new Blob([JSON.stringify(data)],{type:"application/json"});
@@ -281,9 +380,12 @@ function restoreSuite(file){
   const rd=new FileReader();
   rd.onload=()=>{try{
     const d=JSON.parse(rd.result);
-    if(d.type!=="dnd5e_suite_backup"||!d.store)throw 0;
-    if(!confirm("Ripristinare il backup? I dati attuali di questo browser verranno sovrascritti."))return;
-    for(const k in d.store)localStorage.setItem(k,d.store[k]);
+    if(d.type!=="dnd5e_suite_backup"||!d.store||typeof d.store!=="object")throw 0;
+    const keys=Object.keys(d.store).filter(k=>SUITE_KEYS.includes(k)&&typeof d.store[k]==="string");
+    if(!keys.length)throw 0;
+    if(!confirm("Ripristinare il backup? Tutti i dati della suite in questo browser verranno sostituiti da quelli del file."))return;
+    /* sostituzione completa: le chiavi della suite assenti nel backup vengono rimosse, così non restano dati misti */
+    SUITE_KEYS.forEach(k=>{try{if(keys.includes(k))localStorage.setItem(k,safeStoreVal(k,d.store[k]));else localStorage.removeItem(k)}catch(e){}});
     alert("✅ Backup ripristinato. La pagina verrà ricaricata.");location.reload();
   }catch(err){alert("File di backup non valido.")}};
   rd.readAsText(file);
