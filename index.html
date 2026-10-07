@@ -81,10 +81,16 @@ textarea{width:100%; min-height:90px; resize:vertical; line-height:1.5}
   <a href="https://dcamuti.github.io/dnd5e-tool-characters/">⚔️ Schede PG</a>
   <a href="https://dcamuti.github.io/dnd5e-tool-npcs/">🎭 NPC</a>
   <a href="https://dcamuti.github.io/dnd5e-tool-encounters/">🐉 Incontri</a>
+  <a href="https://dcamuti.github.io/dnd5e-tool-world/">🌍 Mondo</a>
   <a class="on" href="https://dcamuti.github.io/dnd5e-tool-journal/">📖 Diario</a>
   <a href="https://dcamuti.github.io/dnd5e-tool-puzzles/">🔐 Enigmi</a>
 </nav>
 <main>
+  <div class="panel">
+    <h2>🧭 Profilo della campagna</h2>
+    <div class="hint">Orienta tutti i generatori della suite (NPC, Mondo, enigmi, dungeon): nomi, luoghi, eventi e toni pescano di preferenza ciò che è adatto a questo profilo.</div>
+    <div class="toolbar" id="profBox"></div>
+  </div>
   <div class="panel">
     <h2>🧭 Panoramica campagna</h2>
     <div class="hint">Dati letti in automatico dagli altri tool della suite (stesso browser e stessa origine). <a onclick="overview()" style="color:var(--gold-l);cursor:pointer;text-decoration:underline">↻ Aggiorna</a></div>
@@ -156,6 +162,93 @@ function safeParse(txt,allowPzHtml){
     return cleanStr(v)})}
 /* valore di una chiave del backup: è JSON (tranne la lingua, che è testo semplice) */
 function safeStoreVal(k,v){try{return JSON.stringify(safeParse(v,k==="dnd5e_puzzles"))}catch(e){return String(v).replace(/[^\w-]/g,"")}}
+/* ==== MOTORE SUITE v1 ==== */
+/* Base comune dei generatori: casualità con seme, modelli con etichette, profilo campagna, invio al diario.
+   Questo blocco è identico in tutti i tool della suite: modificarlo ovunque insieme. */
+/* --- casualità con seme (mulberry32): stesso seme → stesso risultato --- */
+function mkRng(seed){let a=0;const s=String(seed);for(let i=0;i<s.length;i++)a=(Math.imul(a^s.charCodeAt(i),2654435761)+i)>>>0;
+  return()=>{a=(a+0x6D2B79F5)>>>0;let t=a;t=Math.imul(t^(t>>>15),t|1);t^=t+Math.imul(t^(t>>>7),t|61);return((t^(t>>>14))>>>0)/4294967296}}
+let RNG=Math.random;
+const rnd=()=>RNG();
+const rInt=(a,b)=>a+Math.floor(rnd()*(b-a+1));
+const rDie=n=>1+Math.floor(rnd()*n);
+const rPick=a=>a[Math.floor(rnd()*a.length)];
+const rShuffle=a=>{const b=a.slice();for(let i=b.length-1;i>0;i--){const j=Math.floor(rnd()*(i+1));[b[i],b[j]]=[b[j],b[i]]}return b};
+const rSample=(a,n)=>rShuffle(a).slice(0,n);
+function newSeed(){return Math.random().toString(36).slice(2,8)}
+/* esegue fn con il generatore fissato sul seme indicato */
+function withSeed(seed,fn){const prev=RNG;RNG=mkRng(seed);try{return fn()}finally{RNG=prev}}
+
+/* --- profilo campagna (impostato nel Diario, letto da tutti i generatori) --- */
+const PROF_OPTS={
+  tono:[["eroico","Eroico"],["cupo","Cupo"],["leggero","Leggero"]],
+  amb:[["misto","Misto"],["citta","Città"],["costa","Costa e mare"],["foresta","Foreste"],["montagna","Montagne"],["pianura","Pianure e colline"],["palude","Paludi"],["deserto","Deserto"],["artico","Terre gelide"],["sottosuolo","Sottosuolo"]],
+  magia:[["bassa","Magia rara"],["media","Magia presente"],["alta","Magia ovunque"]]};
+const PROF_DEF={tono:"eroico",amb:"misto",magia:"media"};
+let PROF_OVR=null;/* modifica temporanea, solo per questa pagina */
+function profGet(){let p={};try{p=JSON.parse(localStorage.getItem("dnd5e_profile")||"{}")||{}}catch(e){}
+  const o=Object.assign({},PROF_DEF,p,PROF_OVR||{});
+  for(const k in PROF_OPTS)if(!PROF_OPTS[k].some(x=>x[0]===o[k]))o[k]=PROF_DEF[k];return o}
+function profSave(p){try{localStorage.setItem("dnd5e_profile",JSON.stringify(p))}catch(e){}}
+function profLabel(k,v){const x=(PROF_OPTS[k]||[]).find(y=>y[0]===v);return x?x[1]:v}
+/* etichette attive: tono, ambiente, magia (es. ["cupo","costa","magia-bassa"]) */
+function profTags(extra){const p=profGet();return[p.tono,p.amb,"magia-"+p.magia].concat(extra||[]).filter(Boolean)}
+/* badge del profilo: clic per cambiarlo solo in questa pagina */
+function profBadge(elId,onChange){const el=document.getElementById(elId);if(!el)return;
+  const p=profGet();
+  el.innerHTML=`<span class="pf-badge" title="Profilo campagna: orienta i generatori. Si imposta nel Diario; qui puoi cambiarlo solo per questa pagina.">🧭 ${profLabel("tono",p.tono)} · ${profLabel("amb",p.amb)} · ${profLabel("magia",p.magia)}${PROF_OVR?' <i style="opacity:.7">(temporaneo)</i>':""} ▾</span>
+   <span class="pf-pop" style="display:none">${Object.keys(PROF_OPTS).map(k=>`<select data-k="${k}">${PROF_OPTS[k].map(([v,l])=>`<option value="${v}"${p[k]===v?" selected":""}>${l}</option>`).join("")}</select>`).join("")}
+   ${PROF_OVR?'<a class="pf-reset">↺ usa il profilo del Diario</a>':""}</span>`;
+  const pop=el.querySelector(".pf-pop");
+  el.querySelector(".pf-badge").onclick=()=>{pop.style.display=pop.style.display==="none"?"inline-flex":"none"};
+  pop.querySelectorAll("select").forEach(sel=>sel.onchange=()=>{PROF_OVR=PROF_OVR||{};PROF_OVR[sel.dataset.k]=sel.value;profBadge(elId,onChange);if(onChange)onChange()});
+  const rs=pop.querySelector(".pf-reset");if(rs)rs.onclick=()=>{PROF_OVR=null;profBadge(elId,onChange);if(onChange)onChange()};
+}
+(function(){try{const st=document.createElement("style");st.textContent=
+  ".pf-badge{display:inline-block;cursor:pointer;background:linear-gradient(180deg,#2c2216,#241b10);border:1px solid #4a3826;border-radius:20px;padding:4px 12px;font-size:.78rem;color:#ece2d0}"+
+  ".pf-badge:hover{border-color:#c9a227;color:#eccb62}.pf-pop{gap:6px;margin-left:8px;flex-wrap:wrap;align-items:center}.pf-pop select{font-size:.78rem;padding:3px 6px}"+
+  ".pf-reset{color:#eccb62;cursor:pointer;font-size:.75rem;text-decoration:underline}@media print{.pf-badge,.pf-pop{display:none!important}}";
+  document.head.appendChild(st)}catch(e){}})();
+
+/* --- modelli con etichette ---
+   G = { chiave: [ "testo", {t:"testo", tags:["costa","cupo"], w:2}, ... ] }
+   Nel testo: {chiave} espande · {chiave>v} espande e ricorda in v · {$v} riusa · {a|b|c} scelta in linea · {^chiave} con iniziale maiuscola.
+   Le voci con etichette in comune con il contesto pesano di più; un'etichetta "!x" rende la voce valida SOLO se il contesto ha x. */
+function gPick(list,tags){
+  const ok=[],w=[];let tot=0;
+  (list||[]).forEach(e=>{const o=typeof e==="string"?{t:e}:e;const tg=o.tags||[];
+    if(tg.some(t=>t[0]==="!"&&!tags.includes(t.slice(1))))return;
+    const m=tg.filter(t=>tags.includes(t[0]==="!"?t.slice(1):t)).length;
+    const ww=(o.w||1)*(1+2*m);ok.push(o);w.push(ww);tot+=ww});
+  if(!ok.length)return"";
+  let r=rnd()*tot;for(let i=0;i<ok.length;i++){r-=w[i];if(r<=0)return ok[i].t}return ok[ok.length-1].t}
+function gExpand(G,tpl,ctx,depth){ctx=ctx||{};ctx.tags=ctx.tags||[];ctx.vars=ctx.vars||{};depth=depth||0;
+  if(depth>12)return tpl;
+  return String(tpl).replace(/\{([^{}]+)\}/g,(m,body)=>{
+    if(body[0]==="$")return ctx.vars[body.slice(1)]??"";
+    if(body.includes("|"))return gExpand(G,rPick(body.split("|")),ctx,depth+1);
+    let cap=false;if(body[0]==="^"){cap=true;body=body.slice(1)}
+    const [key,save]=body.split(">");
+    if(!G[key])return m;
+    let out=gExpand(G,gPick(G[key],ctx.tags),ctx,depth+1);
+    if(cap)out=out.charAt(0).toUpperCase()+out.slice(1);
+    if(save)ctx.vars[save]=out;
+    return out})}
+
+/* --- invio al Diario di Campagna --- */
+function diaryLoad(){let D={};try{D=JSON.parse(localStorage.getItem("dnd5e_diary")||"{}")||{}}catch(e){}
+  ["sessions","npcs","places","hooks"].forEach(k=>{if(!Array.isArray(D[k]))D[k]=[]});return D}
+function diarySave(D){try{localStorage.setItem("dnd5e_diary",JSON.stringify(D))}catch(e){}}
+const diaryId=()=>Date.now().toString(36)+Math.random().toString(36).slice(2,6);
+/* kind: "npcs" {name,where,att,note} · "places" {name,note} · "hooks" {text} · "session" testo da aggiungere all'ultima sessione */
+function toDiary(kind,item){const D=diaryLoad();
+  if(kind==="session"){if(D.sessions.length)D.sessions[0].text=(D.sessions[0].text?D.sessions[0].text+"\n\n":"")+item;
+    else D.sessions.unshift({id:diaryId(),date:new Date().toISOString().slice(0,10),title:"Sessione 1",text:item});diarySave(D);return"added"}
+  const key=kind==="hooks"?"text":"name";
+  const ex=D[kind].find(x=>(x[key]||"").trim().toLowerCase()===(item[key]||"").trim().toLowerCase());
+  if(ex){Object.assign(ex,item,{id:ex.id});diarySave(D);return"updated"}
+  D[kind].unshift(Object.assign({id:diaryId()},kind==="hooks"?{done:false}:{},item));diarySave(D);return"added"}
+/* ==== FINE MOTORE SUITE ==== */
 function ks(){const y=window.scrollY;requestAnimationFrame(()=>window.scrollTo(0,y))}
 const esc=s=>(s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/"/g,"&quot;");
 
@@ -311,11 +404,12 @@ function delXp(id){
 window.addEventListener("storage",e=>{
   if(e.key==="dnd5e_diary"){DIA=lsGet("dnd5e_diary",DIA);["sessions","npcs","places","hooks"].forEach(k=>{if(!Array.isArray(DIA[k]))DIA[k]=[]});
     if(!DIA.xp||typeof DIA.xp.total!=="number")DIA.xp={total:0,log:[]};render();renderXp()}
-  if(["dnd5e_chars","dnd5e_npcs","enc_saved","enc_trk","dnd5e_puzzles"].includes(e.key)){overview();renderXp()}
+  if(["dnd5e_chars","dnd5e_npcs","enc_saved","enc_trk","dnd5e_puzzles","dnd5e_world"].includes(e.key)){overview();renderXp()}
+  if(e.key==="dnd5e_profile")renderProf();
 });
 /* panoramica campagna: legge i dati degli altri tool (stessa origine) */
-const T_URL={pg:"https://dcamuti.github.io/dnd5e-tool-characters/",npc:"https://dcamuti.github.io/dnd5e-tool-npcs/",enc:"https://dcamuti.github.io/dnd5e-tool-encounters/",pz:"https://dcamuti.github.io/dnd5e-tool-puzzles/"};
-const T_FILE={pg:"dnd5e_tool_characters.html",npc:"dnd5e_tool_npcs.html",enc:"dnd5e_tool_encounters.html",pz:"dnd5e_tool_puzzles.html"};
+const T_URL={pg:"https://dcamuti.github.io/dnd5e-tool-characters/",npc:"https://dcamuti.github.io/dnd5e-tool-npcs/",enc:"https://dcamuti.github.io/dnd5e-tool-encounters/",pz:"https://dcamuti.github.io/dnd5e-tool-puzzles/",world:"https://dcamuti.github.io/dnd5e-tool-world/"};
+const T_FILE={pg:"dnd5e_tool_characters.html",npc:"dnd5e_tool_npcs.html",enc:"dnd5e_tool_encounters.html",pz:"dnd5e_tool_puzzles.html",world:"dnd5e_tool_world.html"};
 /* online si usano gli indirizzi GitHub Pages; in locale i file nella stessa cartella (stessi dati del browser) */
 function toolUrl(k){return /github\.io$/.test(location.hostname)?T_URL[k]:T_FILE[k]}
 function overview(){
@@ -340,6 +434,12 @@ function overview(){
     h+=box(`🗡 Combattimento in corso${trk.round?` · round ${trk.round}`:""}`,toolUrl("enc"),
       `<div style="font-size:.88rem;color:var(--muted)">${pcs.length} PG · ${alive.length}/${mons.length} nemici in piedi${pcs.length?" — "+pcs.map(u=>`<b style="color:${u.hp===0?"#e07a7a":"var(--ink)"}">${esc(u.name)}</b>${u.hp!=null?` ${u.hp}/${u.hpMax}`:""}`).join(", "):""}</div>`);
   }
+  const W=lsGet("dnd5e_world",{}),fz=Array.isArray(W.factions)?W.factions:[];
+  h+=box(`⚔ Fazioni (${fz.length})`,toolUrl("world"),
+    fz.length?fz.slice(0,6).map(f=>{const n=(f.steps||[]).length,p=f.prog||0;
+      return`<div style="font-size:.88rem;padding:2px 0"><b style="color:var(--ink)">${esc(f.name)}</b> <span style="color:var(--muted)">— vuole ${esc(f.goal||"")}</span>
+       <span style="font-family:monospace;color:${p>=n?"#e07a7a":"var(--gold-l)"};margin-left:6px">${"■".repeat(p)}${"□".repeat(Math.max(0,n-p))}</span>${p<n&&f.steps[p]?` <span style="color:var(--muted);font-size:.8rem">prossimo passo: ${esc(f.steps[p])}</span>`:p>=n?' <b style="color:#e07a7a;font-size:.8rem">piano compiuto</b>':""}</div>`}).join("")
+    :`<span style="color:var(--muted);font-size:.85rem">Nessuna fazione: creale nel tool Mondo, e falle avanzare tra una sessione e l'altra.</span>`);
   h+=box(`🔐 Enigmi salvati (${pz.length})`,toolUrl("pz"),
     pz.length?pz.slice(0,5).map(p=>`<div style="font-size:.88rem;padding:2px 0"><b style="color:var(--ink)">${esc(p.name)}</b> <span style="color:var(--muted)">— ${esc(p.tipo||"")}</span></div>`).join("")
     :`<span style="color:var(--muted);font-size:.85rem">Nessun enigma salvato.</span>`);
@@ -367,7 +467,7 @@ function impDiary(inp){
   rd.readAsText(f);inp.value="";
 }
 /* backup suite completo */
-const SUITE_KEYS=["dnd5e_chars","dnd5e_draft","dnd5e_lang","dnd5e_homebrew","dnd5e_npcs","enc_src","enc_saved","enc_trk","enc_hb","dnd5e_diary","dnd5e_puzzles"];
+const SUITE_KEYS=["dnd5e_chars","dnd5e_draft","dnd5e_lang","dnd5e_homebrew","dnd5e_npcs","enc_src","enc_saved","enc_trk","enc_hb","dnd5e_diary","dnd5e_puzzles","dnd5e_profile","dnd5e_world"];
 function backupSuite(){
   const data={type:"dnd5e_suite_backup",ver:2,date:new Date().toISOString(),store:{}};
   let n=0;SUITE_KEYS.forEach(k=>{try{const v=localStorage.getItem(k);if(v!=null){data.store[k]=v;n++}}catch(e){}});
@@ -390,6 +490,11 @@ function restoreSuite(file){
   }catch(err){alert("File di backup non valido.")}};
   rd.readAsText(file);
 }
+function renderProf(){const p=profGet();
+  $("profBox").innerHTML=Object.keys(PROF_OPTS).map(k=>`<label style="font-size:.85rem;color:var(--muted)">${{tono:"Tono",amb:"Ambiente prevalente",magia:"Magia"}[k]}
+    <select onchange="setProf('${k}',this.value)">${PROF_OPTS[k].map(([v,l])=>`<option value="${v}"${p[k]===v?" selected":""}>${l}</option>`).join("")}</select></label>`).join("")}
+function setProf(k,v){const p=profGet();p[k]=v;profSave(p);renderProf()}
+renderProf();
 render();
 overview();
 renderXp();
